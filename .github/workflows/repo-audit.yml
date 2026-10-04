@@ -39,7 +39,7 @@ jobs:
             fi
           else
             if [ -z "$NUM" ] || [ "$NUM" = "null" ]; then
-              gh issue create --title "$TITLE" --body-file report.md --label "security"
+              gh issue create --title "$TITLE" --body-file report.md
             else
               gh issue edit "$NUM" --body-file report.md
               gh issue comment "$NUM" --body "Audit updated: $PROBLEMS open items."
