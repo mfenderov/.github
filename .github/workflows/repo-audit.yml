@@ -1,0 +1,42 @@
+name: Repo security audit
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run repo audit
+        id: audit
+        env:
+          GH_TOKEN: ${{ secrets.AUDIT_PAT }}
+          REPORT_PATH: report.md
+        run: python3 .github/scripts/repo-audit.py
+
+      - name: Upsert tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="🔍 Secret-scan coverage audit"
+          NUM=$(gh issue list --search "$TITLE in:title" --state open --json number --jq '.[0].number')
+          PROBLEMS="${{ steps.audit.outputs.problems }}"
+          if [ "$PROBLEMS" -eq 0 ]; then
+            if [ -n "$NUM" ] && [ "$NUM" != "null" ]; then
+              gh issue close "$NUM" --comment "All repos covered. Closing."
+            fi
+          else
+            if [ -z "$NUM" ] || [ "$NUM" = "null" ]; then
+              gh issue create --title "$TITLE" --body-file report.md --label "security"
+            else
+              gh issue edit "$NUM" --body-file report.md
+              gh issue comment "$NUM" --body "Audit updated: $PROBLEMS open items."
+            fi
+          fi
