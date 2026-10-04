@@ -14,12 +14,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .github/scripts/repo-audit/go.mod
+
       - name: Run repo audit
         id: audit
+        working-directory: .github/scripts/repo-audit
         env:
           GH_TOKEN: ${{ secrets.AUDIT_PAT }}
-          REPORT_PATH: report.md
-        run: python3 .github/scripts/repo-audit.py
+          REPORT_PATH: ${{ github.workspace }}/report.md
+        run: go run .
 
       - name: Upsert tracking issue
         env:
