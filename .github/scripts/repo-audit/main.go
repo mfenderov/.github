@@ -74,8 +74,7 @@ func main() {
 	all, _ := raw.([]any)
 
 	var missingCaller, unprotectedPush, unprotectedBranch []string
-	unavailable := map[string]bool{}
-	checked := 0
+	checked, skippedPrivate := 0, 0
 
 	for _, item := range all {
 		r, _ := item.(map[string]any)
@@ -91,6 +90,12 @@ func main() {
 			continue
 		}
 		name := parts[1]
+		// Private repo names must never appear in this public repo's
+		// report or logs. Skip them before any per-repo output.
+		if private, _ := r["private"].(bool); private {
+			skippedPrivate++
+			continue
+		}
 		if name == ".github" {
 			continue // host of the shared workflows, no caller needed
 		}
@@ -113,43 +118,23 @@ func main() {
 
 		// NOTE: the list endpoint omits security_and_analysis, fetch per repo.
 		detail := api("repos/mfenderov/"+name,
-			"--jq", "{sec: .security_and_analysis, private: .private, branch: .default_branch}")
+			"--jq", "{push: .security_and_analysis.secret_scanning_push_protection.status, branch: .default_branch}")
 		d, _ := detail.(map[string]any)
-		sec, _ := d["sec"].(map[string]any)
-		scan, _ := sec["secret_scanning"].(map[string]any)
-		push, _ := sec["secret_scanning_push_protection"].(map[string]any)
-		private, _ := d["private"].(bool)
-		branch := str(d, "branch")
-
-		if private {
-			unavailable[name+" secret scanning (needs GHAS)"] = true
-		} else if str(push, "status") != "enabled" {
+		if str(d, "push") != "enabled" {
 			unprotectedPush = append(unprotectedPush, name)
 		}
-		_ = str(scan, "status")
 
-		if !private {
-			prot := apiOrNone("repos/mfenderov/"+name+"/branches/"+branch+"/protection",
-				"--jq", "{force: .allow_force_pushes.enabled}")
-			if prot == nil {
-				unprotectedBranch = append(unprotectedBranch, name+" (no protection)")
-			}
-		} else {
-			unavailable[name+" branch protection (needs Pro)"] = true
+		branch := str(d, "branch")
+		prot := apiOrNone("repos/mfenderov/"+name+"/branches/"+branch+"/protection",
+			"--jq", "{force: .allow_force_pushes.enabled}")
+		if prot == nil {
+			unprotectedBranch = append(unprotectedBranch, name+" (no protection)")
 		}
 	}
 
 	sort.Strings(missingCaller)
 	sort.Strings(unprotectedPush)
 	sort.Strings(unprotectedBranch)
-	unav := make([]string, 0, len(unavailable))
-	for n := range unavailable {
-		unav = append(unav, "- `"+n+"`")
-	}
-	sort.Strings(unav)
-	if len(unav) == 0 {
-		unav = []string{"- none"}
-	}
 
 	lines := []string{
 		"## Secret-scan coverage audit",
@@ -166,8 +151,7 @@ func main() {
 		fmt.Sprintf("### Branch protection missing, public repos (%d)", len(unprotectedBranch)))
 	lines = append(lines, bullets(unprotectedBranch)...)
 	lines = append(lines, "",
-		"### Unavailable without paid plan (GHAS/Pro private repos)")
-	lines = append(lines, unav...)
+		fmt.Sprintf("_%d private repos skipped — names never published here._", skippedPrivate))
 
 	reportPath := os.Getenv("REPORT_PATH")
 	if reportPath == "" {
