@@ -69,6 +69,69 @@ func bullets(items []string) []string {
 	return out
 }
 
+// hasActiveBranchRuleset reports whether an active ruleset targets the branch.
+// Legacy branch protection and rulesets are two separate systems; the audit
+// must recognize both.
+func hasActiveBranchRuleset(repo, branch string) bool {
+	raw := apiOrNone("repos/mfenderov/" + repo + "/rulesets")
+	sets, _ := raw.([]any)
+	for _, item := range sets {
+		rs, _ := item.(map[string]any)
+		if str(rs, "enforcement") != "active" {
+			continue
+		}
+		// NOTE: the list endpoint omits conditions, fetch per ruleset.
+		var id float64
+		switch v := rs["id"].(type) {
+		case float64:
+			id = v
+		default:
+			continue
+		}
+		detail := apiOrNone(fmt.Sprintf("repos/mfenderov/%s/rulesets/%d", repo, int(id)))
+		drs, _ := detail.(map[string]any)
+		if drs == nil {
+			continue
+		}
+		cond, _ := drs["conditions"].(map[string]any)
+		ref, _ := cond["ref_name"].(map[string]any)
+		includes := toStrings(ref["include"])
+		excludes := toStrings(ref["exclude"])
+		target := "refs/heads/" + branch
+		matched := false
+		for _, inc := range includes {
+			if inc == target || inc == "~DEFAULT_BRANCH" || inc == "~ALL" {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		for _, exc := range excludes {
+			if exc == target {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func toStrings(v any) []string {
+	arr, _ := v.([]any)
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func main() {
 	raw := api("user/repos", "--paginate", "--jq", "[.[]]")
 	all, _ := raw.([]any)
@@ -127,7 +190,7 @@ func main() {
 		branch := str(d, "branch")
 		prot := apiOrNone("repos/mfenderov/"+name+"/branches/"+branch+"/protection",
 			"--jq", "{force: .allow_force_pushes.enabled}")
-		if prot == nil {
+		if prot == nil && !hasActiveBranchRuleset(name, branch) {
 			unprotectedBranch = append(unprotectedBranch, name+" (no protection)")
 		}
 	}
